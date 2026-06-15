@@ -49,25 +49,44 @@ cat("Timestamp:", info$Timestamp, "\n\n")
 ```{r INSTALL-LOAD-packages, message=FALSE}
 #could have added message=false
   #----------------- LOAD REQ PACKAGES -----------------# 
-required_packages <- c(
-  "tidyverse", # dplyr, ggplot2, tidyr, purrr, stringr, readr, forcats
+cran_packages <- c(
+  "tidyverse",
   "randomForest",
-  "caret", 
+  "caret",
   "pROC",
   "readxl",
-  "writexl", # Excel export
-  "caret"
+  "writexl",
+  "rmarkdown",
+  "ggplot2"
+)
+bioc_packages <- c(
+  # placeholder
 )
 
-  #-----------------INSTALL MISSING PACKAGES -----------------# 
- new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
- if (length(new_packages)) {
-   install.packages(new_packages)
- }
+  #-----------------INSTALL CRAN PACKAGES -----------------# 
+new_cran <- cran_packages[!(cran_packages %in% installed.packages()[, "Package"])]
 
-#if (!requireNamespace("BiocManager", quietly = TRUE))
-#    install.packages("BiocManager")
-#BiocManager::install("circlize")
+if (length(new_cran) > 0) {
+  install.packages(new_cran)
+}
+
+  #----------------- INSTALL BIOCONDUCTOR -----------------#
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+new_bioc <- bioc_packages[!(bioc_packages %in% installed.packages()[, "Package"])]
+
+if (length(new_bioc) > 0) {
+  BiocManager::install(new_bioc, ask = FALSE)
+}
+
+  #----------------- LOAD PACKAGES -----------------#
+invisible(lapply(cran_packages, library, character.only = TRUE))
+
+  #----------------- AFTER Installation You just need the following  -----------------#
+#install.packages("renv")
+#renv::init()
 ```
 
 
