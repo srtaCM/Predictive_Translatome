@@ -1,0 +1,476 @@
+---
+title: "Predictive Model: Identifying Haustoriated Genes"
+author: "Iliana Castillo-Machuca | Virginia Tech SPES"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+    theme: flatly
+    highlight: tango
+    df_print: paged
+    number_sections: true
+---
+
+```{r CLEAR-env}
+  #----------------- CLEAN ENVIRONMENT -----------------# 
+rm(list = ls(all.names = TRUE)) # Remove all objects from the workspace
+gc()  # Garbage collection to free memory
+
+options(
+  max.print = 1e5,  #cap to avoid massive console dumps
+  scipen = 999, # Use scientific notation 0, use full numbers 999
+  big.mark = ",", #trying to see if i can add commas
+  stringsAsFactors = FALSE, # Keep strings as character by default
+  dplyr.summarise.inform = FALSE, # Suppress dplyr's summaries
+  digits = 3 # Number of digits when printing
+  )
+
+  #----------------- PROJECT INFO -----------------# 
+info <- list(
+  Title = "PREDICTIVE H",
+  R_Version = R.version$version.string,
+  Working_Directory = getwd(),
+  Timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+
+separator <- strrep("=", 80)
+cat("\n", separator, "\n", info$Title, "\n", separator, "\n")
+cat("R Version:", info$R_Version, "\n")
+cat("Working Directory:", info$Working_Directory, "\n")
+cat("Timestamp:", info$Timestamp, "\n\n")
+
+# show session info for reproducibility
+# sessionInfo()
+```
+
+
+```{r INSTALL-LOAD-packages, message=FALSE}
+#could have added message=false
+  #----------------- LOAD REQ PACKAGES -----------------# 
+required_packages <- c(
+  "tidyverse", # dplyr, ggplot2, tidyr, purrr, stringr, readr, forcats
+  "randomForest",
+  "caret", 
+  "pROC",
+  "readxl",
+  "writexl", # Excel export
+  "caret"
+)
+
+  #-----------------INSTALL MISSING PACKAGES -----------------# 
+ new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
+ if (length(new_packages)) {
+   install.packages(new_packages)
+ }
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("circlize")
+```
+
+
+```{r setup-DIR}
+  #-----------------SET OUTPUT DIRECTORY -----------------#
+graphics_dir <- file.path("Results/Graphics")
+tables_dir   <- file.path("Results/Tables") 
+procdata_dir <- file.path("Results/Processed_data")
+
+dirs <- c(graphics_dir, tables_dir, procdata_dir)
+
+# Create directories if they don't exist
+invisible(
+  sapply(
+    dirs,
+    function(d) {
+      if (!dir.exists(d)) {
+        dir.create(d, recursive = TRUE, showWarnings = FALSE)
+      }
+    }
+  )
+)
+## Print confirmation
+cat("Directories ready:\n")
+cat("- Graphics: ", graphics_dir, "\n")
+cat("- Tables:   ", tables_dir, "\n")
+cat("- Proc:     ", procdata_dir, "\n")
+```
+
+
+```{r}
+  #----------------- FILE PATHS -----------------#
+file_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/DESeq2_results.xlsx"
+library(readxl)
+sheets <- excel_sheets(file_path)
+DESeq_res_list <- lapply(sheets, function(x) read_xlsx(file_path, sheet = x))
+# name the list elements by sheet
+names(DESeq_res_list) <- sheets
+
+  #----------------- FORMAT FILES -----------------#
+#Ensure gene IDs are consistent
+res_H_UM <- DESeq_res_list$H_vs_UM_DEGs %>%
+  rename(id = TAIR) %>%
+  mutate(
+    pvalue = signif(pvalue, 3),
+    padj   = signif(padj, 3)
+  )
+
+res_IM_UM <- DESeq_res_list$IM_vs_UM_DEGs %>%
+  rename(id = TAIR) %>%
+  mutate(
+    pvalue = signif(pvalue, 3),
+    padj   = signif(padj, 3)
+  )
+
+#res_H_UM <- res_H_UM %>%
+#  mutate(
+#    pvalue = formatC(pvalue, format = "e", digits = 2),
+#    padj   = formatC(padj, format = "e", digits = 2)
+#  )
+
+#res_IM_UM <- res_IM_UM %>%
+#  mutate(
+#    pvalue = formatC(pvalue, format = "e", digits = 2),
+#    padj   = formatC(padj, format = "e", digits = 2)
+#  )
+
+  ######################### H GREEN GENES   ######################### 
+#H_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/H_green_results.xlsx"
+#sheets <- excel_sheets(H_path)
+#print(sheets)
+#H_res_list <- lapply(sheets, function(x) read_xlsx(H_path, sheet = x))
+
+# name the list elements by sheet
+#names(H_res_list) <- sheets
+#green_H_up <- H_res_list$Green_H_UP
+#green_H_down <- H_res_list$Green_H_DOWN
+```
+
+
+```{r}
+  #----------------- MAIN FEATURES -----------------#
+features <- res_H_UM %>%
+  select(
+    id,
+    logFC_H_UM = log2FoldChange,
+    padj_H_UM = padj,
+    baseMean
+  ) %>%
+  left_join(
+    res_IM_UM %>% select(id, logFC_IM_UM = log2FoldChange, padj_IM_UM = padj),
+    by = "id"
+  )
+#H_genes <- union(green_H_up$id, green_H_down$id) %>% as.character()
+# Create binary label
+#features <- features %>%
+#  mutate(
+#    H_label = factor(ifelse(id %in% H_genes, 1, 0))
+#  )
+
+# Impute missing values in IM vs UM columns
+features <- features %>%
+  mutate(
+    logFC_IM_UM = ifelse(is.na(logFC_IM_UM), 0, logFC_IM_UM),
+    padj_IM_UM  = ifelse(is.na(padj_IM_UM), 0, padj_IM_UM),
+    baseMean    = log10(baseMean + 1),
+    padj_H_UM   = -log10(padj_H_UM + 1e-10),
+    padj_IM_UM  = -log10(padj_IM_UM + 1e-10)
+  )
+```
+
+
+```{r}
+  #----------------- TRAIN TEST SPLIT -----------------#
+set.seed(123)
+trainIndex <- createDataPartition(features$H_label, p = 0.7, list = FALSE)
+train_data <- features[trainIndex, ]
+test_data  <- features[-trainIndex, ]
+
+# Rename label for caret (SMOTE)
+train_data$H_label <- factor(train_data$H_label, levels = c(0,1), labels = c("NonH","H"))
+test_data$H_label  <- factor(test_data$H_label, levels = c(0,1), labels = c("NonH","H"))
+
+table(train_data$H_label)
+table(test_data$H_label)
+```
+
+```{r}
+## 6. RANDOM FOREST WITH SMOTE
+train_ctrl <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  sampling = "smote",       # Apply SMOTE to balance classes
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+set.seed(123)
+rf_smote <- train(
+  H_label ~ logFC_H_UM + padj_H_UM + baseMean + logFC_IM_UM + padj_IM_UM,
+  data = train_data,
+  method = "rf",
+  metric = "ROC",            # Optimize for AUC
+  trControl = train_ctrl,
+  ntree = 500,
+  importance = TRUE
+)
+```
+
+```{r}
+## 7. EVALUATION
+# Predictions
+pred <- predict(rf_smote, test_data)
+prob <- predict(rf_smote, test_data, type = "prob")[, "H"]
+
+# Confusion matrix
+confusionMatrix(pred, test_data$H_label)
+
+# ROC / AUC
+roc_obj <- roc(response = test_data$H_label, predictor = prob, levels = c("NonH","H"))
+plot(roc_obj)
+auc(roc_obj)
+
+# Feature importance
+varImp(rf_smote)
+```
+
+```{r}
+## 8. EXPORT PREDICTIONS TO EXCEL
+
+# Combine gene ID, true label, predicted label, and H probability
+predictions_df <- test_data %>%
+  select(id) %>%                       # keep gene IDs
+  mutate(
+    True_Label = test_data$H_label,
+    Pred_Label = pred,
+    H_Prob     = prob
+  ) %>%
+  arrange(desc(H_Prob))                # optional: rank by probability
+
+# Define output path
+output_file <- file.path(tables_dir, "H_gene_predictions.xlsx")
+
+# Export
+writexl::write_xlsx(predictions_df, output_file)
+
+cat("Predictions exported to:", output_file, "\n")
+```
+
+```{r}
+## 9. TOP H GENE TABLE
+
+# Set probability threshold for “high-confidence H genes”
+prob_thresh <- 0.8
+
+top_H_genes <- predictions_df %>%
+  mutate(
+    Status = case_when(
+      Pred_Label == "H" & True_Label == "H"      ~ "True_Positive",
+      Pred_Label == "H" & True_Label == "NonH"   ~ "False_Positive",
+      Pred_Label == "NonH" & True_Label == "H"   ~ "False_Negative",
+      TRUE                                        ~ "True_Negative"
+    )
+  ) %>%
+  filter(Pred_Label == "H" | H_Prob >= prob_thresh) %>%   # keep predicted H or high-prob candidates
+  arrange(desc(H_Prob))                                  # rank by probability
+
+# Export top H genes
+output_top_file <- file.path(tables_dir, "Top_H_gene_candidates.xlsx")
+writexl::write_xlsx(top_H_genes, output_top_file)
+
+cat("Top H gene candidates exported to:", output_top_file, "\n")
+```
+
+
+
+```{r}
+#Add transporters annotation
+transporter_list <- readxl::read_excel("../HvIM/Data_Repository/6_transporter_df.xlsx")
+transporter_genes <- transporter_list %>%
+  rename(id = TAIR)
+
+features <- features %>%
+  mutate(
+    H_up_fourway   = as.integer(id %in% green_H_up$id),
+    H_down_fourway = as.integer(id %in% green_H_down$id),
+    H_fourway_status = case_when(
+      id %in% green_H_up$id   ~ "H_up",
+      id %in% green_H_down$id ~ "H_down",
+      TRUE ~ "None"
+    )
+  )
+# Combine H_up and H_down into a single set of H genes
+H_genes <- union(green_H_up$id, green_H_down$id)
+H_genes <- as.character(H_genes)  # Ensure consistent type
+features <- features %>%
+  mutate(
+    H_label = as.factor(ifelse(id %in% H_genes, 1, 0))
+  )
+```
+
+
+```{r}
+# Define high-confidence seed genes
+# Prepare modeling dataset
+model_df <- features %>%
+  select(
+    H_label,
+    logFC_H_UM,
+    padj_H_UM,
+    baseMean,
+    logFC_IM_UM,
+    padj_IM_UM
+  ) %>%
+  mutate(
+    baseMean = log10(baseMean + 1),
+    padj_H_UM = -log10(padj_H_UM + 1e-10),
+    padj_IM_UM = -log10(padj_IM_UM + 1e-10),
+    logFC_IM_UM = ifelse(is.na(logFC_IM_UM), 0, logFC_IM_UM),
+    padj_IM_UM = ifelse(is.na(padj_IM_UM), 0, padj_IM_UM)
+  )
+```
+
+
+```{r}
+library(caret)
+set.seed(123)
+
+trainIndex <- createDataPartition(model_df$H_label, p = 0.7, list = FALSE)
+train_data <- model_df[trainIndex, ]
+test_data  <- model_df[-trainIndex, ]
+
+# Check class counts
+table(train_data$H_label)
+table(test_data$H_label)
+
+library(randomForest)
+
+set.seed(123)
+
+# Define sampsize: equal number of 0s and 1s in each tree
+samp_sizes <- table(train_data$H_label)
+min_class <- min(samp_sizes)  # smallest class count
+
+rf_model <- randomForest(
+  H_label ~ .,
+  data = train_data,
+  ntree = 500,
+  importance = TRUE,
+  sampsize = c(`0` = min_class, `1` = min_class)
+)
+# Save model
+saveRDS(rf_model, "Results/Models/rf_H_model.rds")
+
+# Load model later
+rf_model <- readRDS("Results/Models/rf_H_model.rds")
+# Evaluate
+# Predictions
+pred <- predict(rf_model, test_data)
+
+# Confusion matrix
+confusionMatrix(pred, test_data$H_label)
+
+# ROC / AUC
+library(pROC)
+prob <- predict(rf_model, test_data, type = "prob")[,2]
+roc_obj <- roc(test_data$H_label, prob)
+plot(roc_obj)
+auc(roc_obj)
+
+# Feature importance
+varImpPlot(rf_model)
+```
+
+```{r}
+## 10. VISUALIZE MODEL PERFORMANCE
+
+library(ggplot2)
+library(pROC)
+
+# Predicted probabilities for H class
+prob_H <- predict(rf_smote, test_data, type = "prob")[, "H"]
+
+# ROC curve
+roc_obj <- roc(
+  response = test_data$H_label,
+  predictor = prob_H,
+  levels = c("NonH","H")
+)
+
+# Plot ROC
+roc_plot <- ggroc(roc_obj) +
+  ggtitle(paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")")) +
+  theme_minimal() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
+  labs(x = "False Positive Rate", y = "True Positive Rate")
+
+print(roc_plot)
+
+# Plot predicted probabilities for H vs NonH
+prob_df <- test_data %>%
+  mutate(H_prob = prob_H) %>%
+  select(H_label, H_prob)
+
+prob_plot <- ggplot(prob_df, aes(x = H_label, y = H_prob, fill = H_label)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  scale_fill_manual(values = c("NonH" = "#1f77b4", "H" = "#ff7f0e")) +
+  labs(title = "Predicted Probability Distribution for H Genes",
+       x = "True Class",
+       y = "Predicted Probability") +
+  theme_minimal()
+
+print(prob_plot)
+```
+
+```{r}
+## 10. VISUALIZE MODEL PERFORMANCE
+
+library(ggplot2)
+library(pROC)
+
+# Predicted probabilities for H class
+prob_H <- predict(rf_smote, test_data, type = "prob")[, "H"]
+
+# ROC curve
+roc_obj <- roc(
+  response = test_data$H_label,
+  predictor = prob_H,
+  levels = c("NonH","H")
+)
+
+# Plot ROC
+roc_plot <- ggroc(roc_obj) +
+  ggtitle(paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")")) +
+  theme_minimal() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
+  labs(x = "False Positive Rate", y = "True Positive Rate")
+
+print(roc_plot)
+
+# Plot predicted probabilities for H vs NonH
+prob_df <- test_data %>%
+  mutate(H_prob = prob_H) %>%
+  select(H_label, H_prob)
+
+prob_plot <- ggplot(prob_df, aes(x = H_label, y = H_prob, fill = H_label)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  scale_fill_manual(values = c("NonH" = "#1f77b4", "H" = "#ff7f0e")) +
+  labs(title = "Predicted Probability Distribution for H Genes",
+       x = "True Class",
+       y = "Predicted Probability") +
+  theme_minimal()
+
+print(prob_plot)
+```
+
+```{r}
+# Save model
+saveRDS(rf_model, file.path(procdata_dir, "rf_H_model.rds"))
+# Load model later
+rf_model <- readRDS("Results/Models/rf_H_model.rds")
+```
+

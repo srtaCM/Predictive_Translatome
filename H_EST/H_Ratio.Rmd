@@ -1,0 +1,204 @@
+---
+title: "Haustoria Predictive Analysis"
+author: "Iliana Castillo-Machuca | Virginia Tech SPES"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: hide
+    theme: flatly
+    highlight: tango
+    df_print: paged
+    number_sections: true
+---
+
+```{r}
+  ######################### CLEAN ENVIRONMENT   ######################### 
+rm(list = ls(all.names = TRUE)) # Remove all objects from the work space
+gc()  # Garbage collection to free memory
+
+options(
+  max.print = 1e5,  #Reasonable cap to avoid massive console dumps
+  scipen = 0, # Use scientific notation
+  stringsAsFactors = FALSE, # Keep strings as character by default
+  dplyr.summarise.inform = FALSE, # Suppress dplyr's summaries
+  digits = 3 # Number of digits when printing
+  )
+
+  ######################### PROJECT INFO  ######################### 
+info <- list(
+  Title = "H ANALYSIS",
+  R_Version = R.version$version.string,
+  Working_Directory = getwd(),
+  Timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
+
+separator <- strrep("=", 80)
+cat("\n", separator, "\n", info$Title, "\n", separator, "\n")
+cat("R Version:", info$R_Version, "\n")
+cat("Working Directory:", info$Working_Directory, "\n")
+cat("Timestamp:", info$Timestamp, "\n\n")
+
+## Optional: show session info for reproducibility
+# sessionInfo()
+```
+
+```{r}
+#could have added message=false
+  ######################### LOAD REQ PACKAGES  ######################### 
+required_packages <- c(
+  "tidyverse", # dplyr, ggplot2, tidyr, purrr, stringr, readr, forcats
+  "DESeq2", # Differential expression analysis
+#  "patchwork", # Combine multiple ggplot objects
+  "ggrepel", # Add non-overlapping text labels to ggplot2
+  "pheatmap", # Clustered heat maps
+#  "AnnotationDbi", # Gene annotation framework
+#  "org.At.tair.db", # Arabidopsis thaliana annotations
+#  "clusterProfiler", # GO/KEGG enrichment analysis and GSEA
+#  "enrichplot", # Visualization of enrichment results
+#  "vidger", # RNA-seq viz helpers         
+#  "apeglm", # LFC shrinkage  
+#  "RColorBrewer", # Color palettes
+#  "reshape2", # Data reshaping
+#  "dendextend", # Dendrogram
+#  "writexl", # Excel export
+#  "tibble"#, # Tibbles
+  "ggdendro",
+  "EnhancedVolcano"
+#  "knitr",
+#  "ComplexHeatmap",
+#  "circlize"
+)
+  ######################### INSTALL MISSING PACKAGES  ######################### 
+ new_packages <- required_packages[!(required_packages %in% installed.packages()[, "Package"])]
+ if (length(new_packages)) {
+   install.packages(new_packages)
+ }
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("circlize")
+
+```
+
+
+```{r}
+  ######################### SET OUTPUT DIRECTORY  ######################### 
+graphics_dir <- file.path("Results/Graphics")
+tables_dir   <- file.path("Results/Tables") 
+procdata_dir <- file.path("Results/Processed_data")
+
+dirs <- c(graphics_dir, tables_dir, procdata_dir)
+
+# Create directories if they don't exist
+invisible(
+  sapply(
+    dirs,
+    function(d) {
+      if (!dir.exists(d)) {
+        dir.create(d, recursive = TRUE, showWarnings = FALSE)
+      }
+    }
+  )
+)
+```
+
+
+```{r}
+  ######################### LOAD featureCounts WHOLE GENOME ALIGNMENT #########################
+featcount <- read_tsv("../HvIM/Data_Repository/featcount.txt", skip = 1)
+count_cols <- colnames(featcount)[7:ncol(featcount)]
+read.count <- featcount %>%
+  dplyr::select(all_of(count_cols)) %>%
+  as.matrix()
+rownames(read.count) <- featcount[[1]]
+
+## Checks
+stopifnot(!anyDuplicated(rownames(read.count)))
+stopifnot(is.numeric(read.count[1, ]))
+```
+
+```{r}
+#Variables
+sample_info1 <- data.frame(
+  Sample = c (
+    "IT-107", "IT-108", "IT-109", "IT-110", 
+    "H-107", "H-108", "H-109", "H-110", "H-111", 
+    "UT-106", "UT-108", "UT-114", 
+    "IT-206", "IT-207", "IT-208", "IT-209", 
+    "IM-206", "IM-207", "IM-208", "IM-209", "IM-210", 
+    "UT-204", "UT-208", "UT-213", "UT-214", 
+    "UM-204", "UM-208", "UM-213", "UM-214", "UM-215"),
+  Groups = c (
+    "IT", "IT", "IT", "IT",
+    "H", "H", "H", "H", "H",
+    "UT", "UT", "UT",
+    "IT", "IT", "IT", "IT", 
+    "IM", "IM", "IM", "IM", "IM",
+    "UT", "UT", "UT", "UT",
+    "UM", "UM", "UM", "UM", "UM"),
+  Condition = c (
+    "Infected", "Infected", "Infected", "Infected",
+    "Infected", "Infected", "Infected", "Infected", "Infected", 
+    "Uninfected", "Uninfected", "Uninfected",
+    "Infected", "Infected", "Infected", "Infected", 
+    "Infected", "Infected", "Infected", "Infected", "Infected",
+    "Uninfected", "Uninfected", "Uninfected", "Uninfected",
+    "Uninfected", "Uninfected", "Uninfected", "Uninfected", "Uninfected"),
+  Replicate = c (
+    "IT-107", "IT-108", "IT-109", "IT-110", 
+    "H-107", "H-108", "H-109", "H-110", "H-111", 
+    "UT-106", "UT-108", "UT-114", 
+    "IT-206", "IT-207", "IT-208", "IT-209", 
+    "IM-206", "IM-207", "IM-208", "IM-209", "IM-210", 
+    "UT-204", "UT-208", "UT-213", "UT-214",
+    "UM-204", "UM-208", "UM-213", "UM-214", "UM-215"),
+  row.names = "Sample") 
+
+sample_info1$Groups <- as.factor (sample_info1$Groups)
+all (rownames (sample_info1) %in% colnames (read.count)) 
+#if "false" something is wrong
+```
+
+```{r message=false}
+  library(DESeq2)
+```
+
+```{r Data Matrix}
+# Create a DESeqDataSet object from the matrix of counts and column metadata  
+
+data_set1 <- DESeqDataSetFromMatrix (countData = read.count, 
+                               colData = sample_info1, 
+                               design = ~ Groups)
+
+# Prefilter
+data_set1 <- data_set1 [rowSums (counts (data_set1)) > 10, ]
+
+# Set control group
+data_set1$Groups <- relevel (data_set1$Groups, ref = "UT")
+#data_set$Groups 
+```
+
+```{r}
+library(ggplot2)  
+library(ggrepel)
+dds <- estimateDispersionsGeneEst(dds)
+vsd <- varianceStabilizingTransformation (data_set1)
+colnames (vsd) <- sample_info1$Replicate 
+norm.counts <- assay (data_set1)
+# PCA principle component analysis, visualize the similarities and differences between *samples*
+pc_data <- plotPCA (vsd, intgroup = c( "Replicate" , "Groups" ), returnData = TRUE) 
+percentVar <- round (100 * attr (pc_data, "percentVar" ))
+
+p <- ggplot (pc_data, aes(PC1, PC2, label = Replicate, colour = Groups)) +
+  geom_point (aes (shape = Groups), size = 4) + scale_color_manual (values = c( "#FF093E", "#BF40BF", "#861F41", "navy", "orange", "green1" )) +
+   theme_classic()
+
+p2 <- p + geom_text_repel (box.padding = 1, cex = 3, max.overlaps = 30, segment.linetype = 2) + labs (title = "PCA of VST Normalized Gene Counts" ) +
+  xlab(paste0 ( "PC1: ", percentVar[1], "% variance" )) +
+  ylab(paste0 ( "PC2: ", percentVar[2], "% variance" ))
+p2
+#ggsave("./1_deseq/1_PCA_trapCLE2.pdf", width = 10, height = 10)
+```
+

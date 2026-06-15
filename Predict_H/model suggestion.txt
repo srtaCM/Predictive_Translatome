@@ -1,0 +1,185 @@
+🔹 STEP 1: Define your response variable (labels)
+
+This is the most important step biologically.
+
+Example (based on your current filtering logic):
+# H-specific genes (positive class)
+H_genes <- df %>%
+  filter(color == "green", padj_x < 0.05, logFC_x > 1) %>%
+  mutate(label = "H")
+
+# Background genes (negative class)
+non_H_genes <- df %>%
+  filter(!(gene %in% H_genes$gene)) %>%
+  mutate(label = "non_H")
+
+model_df <- bind_rows(H_genes, non_H_genes)
+
+👉 From the papers:
+
+Your labels must be high confidence, not noisy DEGs
+🔹 STEP 2: Feature engineering (THIS is where you win)
+
+We’ll implement what the literature emphasizes: multi-layer features.
+
+A. Expression features
+model_df <- model_df %>%
+  mutate(
+    logFC_H = logFC_x,
+    logFC_IM = logFC_y,
+    delta_FC = logFC_x - logFC_y,
+    abs_logFC = abs(logFC_x)
+  )
+B. Significance features
+model_df <- model_df %>%
+  mutate(
+    neglog10_padj_H = -log10(padj_x),
+    neglog10_padj_IM = -log10(padj_y)
+  )
+C. Binary biological features (VERY important)
+
+From your transporter / GO work:
+
+model_df <- model_df %>%
+  mutate(
+    is_transporter = ifelse(gene %in% transporter_list, 1, 0),
+    in_stress_pathway = ifelse(gene %in% stress_genes, 1, 0)
+  )
+
+👉 From literature:
+
+Binary biological annotations often improve interpretability and performance
+D. (Optional but powerful) WGCNA features
+model_df <- model_df %>%
+  left_join(module_membership_df, by = "gene")
+🔹 STEP 3: Prepare data for modeling
+library(caret)
+
+model_df$label <- as.factor(model_df$label)
+
+# Remove non-numeric columns
+model_matrix <- model_df %>%
+  select(-gene, -color)
+🔹 STEP 4: Train/test split
+set.seed(123)
+
+trainIndex <- createDataPartition(model_matrix$label, p = 0.8, list = FALSE)
+train_data <- model_matrix[trainIndex, ]
+test_data  <- model_matrix[-trainIndex, ]
+🔹 STEP 5: Handle class imbalance
+
+Instead of relying only on SMOTE:
+
+control <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+You can also use:
+
+train(..., weights = ifelse(train_data$label == "H", 2, 1))
+
+👉 From papers:
+
+Class weighting often generalizes better than SMOTE
+🔹 STEP 6: Train model (Random Forest baseline)
+set.seed(123)
+
+rf_model <- train(
+  label ~ .,
+  data = train_data,
+  method = "rf",
+  metric = "ROC",
+  trControl = control
+)
+🔹 STEP 7: Evaluate properly (fix your earlier issue)
+pred <- predict(rf_model, test_data)
+confusionMatrix(pred, test_data$label)
+
+Also:
+
+prob <- predict(rf_model, test_data, type = "prob")
+roc_obj <- pROC::roc(test_data$label, prob[, "H"])
+auc(roc_obj)
+🚨 Important (based on your earlier result)
+
+You had:
+
+Accuracy < No Information Rate
+
+That means:
+👉 model is biased toward non-H genes
+
+🔹 STEP 8: Improve H prediction (targeted optimization)
+A. Adjust threshold
+pred_prob <- predict(rf_model, test_data, type = "prob")[, "H"]
+
+pred_custom <- ifelse(pred_prob > 0.3, "H", "non_H")
+confusionMatrix(as.factor(pred_custom), test_data$label)
+B. Try XGBoost (usually better)
+xgb_model <- train(
+  label ~ .,
+  data = train_data,
+  method = "xgbTree",
+  metric = "ROC",
+  trControl = control
+)
+🔹 STEP 9: Feature importance (BIOLOGICAL INTERPRETATION)
+varImp(rf_model)
+
+👉 This is where your paper gets strong:
+
+Identify what defines H genes:
+ΔFC?
+transporters?
+stress pathways?
+🔹 STEP 10: Predict NEW candidate genes
+all_predictions <- predict(rf_model, model_matrix, type = "prob")
+
+model_df$H_probability <- all_predictions[, "H"]
+
+candidate_genes <- model_df %>%
+  filter(H_probability > 0.7, label == "non_H")
+
+👉 This is your:
+“novel haustoriated gene candidates”
+
+🔬 HOW THIS CONNECTS TO YOUR RESEARCH
+
+You are effectively building:
+
+A hybrid model combining:
+Transcriptomics (TRAP-seq)
+Functional annotation (GO, KEGG)
+Transporter biology (your main focus)
+🔥 What makes your model publishable
+
+From the literature + your dataset:
+
+1. Not just prediction
+
+→ You interpret why genes are H-specific
+
+2. Not just DEGs
+
+→ You identify genes missed by thresholds
+
+3. Biological validation layer
+
+→ Transporters + nutrient pathways
+
+🚀 If you want next step (highly recommended)
+
+I can help you:
+
+1. Debug your current model
+Why H recall is low
+Whether features are weak or mislabeled
+2. Build a clean, final pipeline script
+Ready for methods section
+3. Help you write:
+Methods (ML section)
+Results (model performance + biological insights)
+
