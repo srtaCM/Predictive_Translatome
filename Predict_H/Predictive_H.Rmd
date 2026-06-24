@@ -22,7 +22,6 @@ gc()  # Garbage collection to free memory
 options(
   max.print = 1e5,  #cap to avoid massive console dumps
   scipen = 999, # Use scientific notation 0, use full numbers 999
-  big.mark = ",", #trying to see if i can add commas
   stringsAsFactors = FALSE, # Keep strings as character by default
   dplyr.summarise.inform = FALSE, # Suppress dplyr's summaries
   digits = 3 # Number of digits when printing
@@ -56,8 +55,7 @@ cran_packages <- c(
   "pROC",
   "readxl",
   "writexl",
-  "rmarkdown",
-  "ggplot2"
+  "rmarkdown"
 )
 bioc_packages <- c(
   # placeholder
@@ -86,7 +84,7 @@ invisible(lapply(cran_packages, library, character.only = TRUE))
 
   #----------------- AFTER Installation You just need the following  -----------------#
 #install.packages("renv")
-#renv::init()
+renv::init()
 ```
 
 
@@ -109,22 +107,17 @@ invisible(
     }
   )
 )
-## Print confirmation
-cat("Directories ready:\n")
-cat("- Graphics: ", graphics_dir, "\n")
-cat("- Tables:   ", tables_dir, "\n")
-cat("- Proc:     ", procdata_dir, "\n")
 ```
 
 
-```{r}
+```{r FILE PATHS}
   #----------------- FILE PATHS -----------------#
 file_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/DESeq2_results.xlsx"
-library(readxl)
+#library(readxl)
 sheets <- excel_sheets(file_path)
 DESeq_res_list <- lapply(sheets, function(x) read_xlsx(file_path, sheet = x))
-# name the list elements by sheet
-names(DESeq_res_list) <- sheets
+
+names(DESeq_res_list) <- sheets # name the list elements by sheet
 
   #----------------- FORMAT FILES -----------------#
 #Ensure gene IDs are consistent
@@ -142,61 +135,277 @@ res_IM_UM <- DESeq_res_list$IM_vs_UM_DEGs %>%
     padj   = signif(padj, 3)
   )
 
-#res_H_UM <- res_H_UM %>%
-#  mutate(
-#    pvalue = formatC(pvalue, format = "e", digits = 2),
-#    padj   = formatC(padj, format = "e", digits = 2)
-#  )
+H_genes <- res_H_UM %>%
+  filter(padj < 0.05, log2FoldChange > 1)
 
-#res_IM_UM <- res_IM_UM %>%
-#  mutate(
-#    pvalue = formatC(pvalue, format = "e", digits = 2),
-#    padj   = formatC(padj, format = "e", digits = 2)
-#  )
+ #----------------- FORMAT FILES -----------------#
+H_specific <- res_H_UM %>%
+  filter(padj < 0.05) %>%
+  anti_join(
+    res_IM_UM %>% filter(padj < 0.05),
+    by = "id"
+  )
 
-  ######################### H GREEN GENES   ######################### 
-#H_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/H_green_results.xlsx"
-#sheets <- excel_sheets(H_path)
-#print(sheets)
-#H_res_list <- lapply(sheets, function(x) read_xlsx(H_path, sheet = x))
-
-# name the list elements by sheet
-#names(H_res_list) <- sheets
-#green_H_up <- H_res_list$Green_H_UP
-#green_H_down <- H_res_list$Green_H_DOWN
+res_H_UM <- res_H_UM %>%
+  mutate(label = ifelse(padj < 0.05 & log2FoldChange > 1, 1, 0))
 ```
+
+
+
 
 
 ```{r}
-  #----------------- MAIN FEATURES -----------------#
-features <- res_H_UM %>%
-  select(
-    id,
-    logFC_H_UM = log2FoldChange,
-    padj_H_UM = padj,
-    baseMean
-  ) %>%
-  left_join(
-    res_IM_UM %>% select(id, logFC_IM_UM = log2FoldChange, padj_IM_UM = padj),
+# Install if needed
+# install.packages("randomForest")
+
+library(randomForest)
+
+# Load your data
+df <- read.csv("data.csv")
+
+# Separate features and target
+X <- df[, setdiff(names(df), "target")]
+y <- df$target
+
+# Train/test split
+set.seed(42)
+train_idx <- sample(seq_len(nrow(df)), size = 0.8 * nrow(df))
+
+X_train <- X[train_idx, ]
+y_train <- y[train_idx]
+
+X_test  <- X[-train_idx, ]
+y_test  <- y[-train_idx]
+
+# Fit Random Forest
+rf_model <- randomForest(
+  x = X_train,
+  y = as.factor(y_train),
+  ntree = 300,
+  mtry = floor(sqrt(ncol(X_train)))
+)
+
+# Predict
+preds <- predict(rf_model, X_test)
+
+# Accuracy
+accuracy <- mean(preds == y_test)
+print(paste("Accuracy:", accuracy))
+
+```
+
+
+
+```{r}
+ library(randomForest)
+
+df <- read.csv("data.csv")
+
+X <- df[, setdiff(names(df), "target")]
+y <- df$target
+
+set.seed(42)
+train_idx <- sample(seq_len(nrow(df)), size = 0.8 * nrow(df))
+
+X_train <- X[train_idx, ]
+y_train <- y[train_idx]
+
+X_test  <- X[-train_idx, ]
+y_test  <- y[-train_idx]
+
+rf_model <- randomForest(
+  x = X_train,
+  y = as.factor(y_train),
+  ntree = 500,
+  importance = TRUE
+)
+
+preds <- predict(rf_model, X_test)
+print(mean(preds == y_test))
+
+# Variable importance
+importance(rf_model)
+varImpPlot(rf_model)
+
+```
+
+```{r}
+# 1. LOAD PACKAGES
+
+cran_packages <- c(
+  "tidyverse",
+  "readxl",
+  "caret",
+  "pROC",
+  "randomForest"
+)
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+new_cran <- cran_packages[!(cran_packages %in% installed.packages()[, "Package"])]
+if (length(new_cran)) install.packages(new_cran)
+
+invisible(lapply(cran_packages, library, character.only = TRUE))
+
+
+# =========================================================
+# 2. FILE PATHS
+# =========================================================
+file_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/DESeq2_results.xlsx"
+
+sheets <- excel_sheets(file_path)
+DESeq_res_list <- lapply(sheets, read_xlsx, path = file_path)
+names(DESeq_res_list) <- sheets
+
+
+# =========================================================
+# 3. DESeq2 RESULTS PROCESSING (for biology only)
+# =========================================================
+
+res_H_UM <- DESeq_res_list$H_vs_UM_DEGs %>%
+  rename(id = TAIR)
+
+res_IM_UM <- DESeq_res_list$IM_vs_UM_DEGs %>%
+  rename(id = TAIR)
+
+# DE genes (for interpretation only, NOT ML features)
+H_DE_genes <- res_H_UM %>%
+  filter(padj < 0.05, log2FoldChange > 1)
+
+H_specific <- res_H_UM %>%
+  filter(padj < 0.05) %>%
+  anti_join(
+    res_IM_UM %>% filter(padj < 0.05),
     by = "id"
   )
-#H_genes <- union(green_H_up$id, green_H_down$id) %>% as.character()
-# Create binary label
-#features <- features %>%
-#  mutate(
-#    H_label = factor(ifelse(id %in% H_genes, 1, 0))
-#  )
 
-# Impute missing values in IM vs UM columns
-features <- features %>%
-  mutate(
-    logFC_IM_UM = ifelse(is.na(logFC_IM_UM), 0, logFC_IM_UM),
-    padj_IM_UM  = ifelse(is.na(padj_IM_UM), 0, padj_IM_UM),
-    baseMean    = log10(baseMean + 1),
-    padj_H_UM   = -log10(padj_H_UM + 1e-10),
-    padj_IM_UM  = -log10(padj_IM_UM + 1e-10)
-  )
+
+# =========================================================
+# 4. LOAD EXPRESSION MATRIX (CRITICAL STEP)
+# =========================================================
+# You MUST have normalized counts matrix:
+# rows = genes, columns = samples
+
+# Example placeholder (replace with your real object)
+# counts <- DESeq2::counts(dds, normalized = TRUE)
+
+# For structure clarity:
+expr_matrix <- as.data.frame(counts)  # genes x samples
+
+
+# =========================================================
+# 5. BUILD SAMPLE LABELS
+# =========================================================
+sample_info <- data.frame(
+  sample = colnames(expr_matrix),
+  label = ifelse(grepl("H", colnames(expr_matrix)), "H", "UM")
+)
+
+sample_info$label <- factor(sample_info$label)
+
+
+# =========================================================
+# 6. TRANSPOSE FOR ML
+# =========================================================
+ml_data <- as.data.frame(t(expr_matrix))
+ml_data$sample <- rownames(ml_data)
+
+ml_data <- ml_data %>%
+  left_join(sample_info, by = "sample")
+
+ml_data <- ml_data %>% select(-sample)
+
+
+# =========================================================
+# 7. TRAIN / TEST SPLIT
+# =========================================================
+set.seed(123)
+
+trainIndex <- createDataPartition(ml_data$label, p = 0.7, list = FALSE)
+
+train_data <- ml_data[trainIndex, ]
+test_data  <- ml_data[-trainIndex, ]
+
+train_x <- train_data %>% select(-label)
+train_y <- train_data$label
+
+test_x  <- test_data %>% select(-label)
+test_y  <- test_data$label
+
+
+# =========================================================
+# 8. RANDOM FOREST MODEL (WITH CV + SMOTE)
+# =========================================================
+ctrl <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  sampling = "smote"
+)
+
+set.seed(123)
+
+rf_model <- train(
+  x = train_x,
+  y = train_y,
+  method = "rf",
+  metric = "ROC",
+  trControl = ctrl,
+  importance = TRUE
+)
+
+
+# =========================================================
+# 9. MODEL EVALUATION
+# =========================================================
+pred_class <- predict(rf_model, test_x)
+pred_prob  <- predict(rf_model, test_x, type = "prob")
+
+confusionMatrix(pred_class, test_y)
+
+roc_obj <- pROC::roc(response = test_y,
+                     predictor = pred_prob$H,
+                     levels = rev(levels(test_y)))
+
+plot(roc_obj)
+
+
+# =========================================================
+# 10. FEATURE IMPORTANCE (BIOLOGICAL INSIGHT)
+# =========================================================
+importance <- varImp(rf_model)
+
+top_genes <- importance$importance %>%
+  as.data.frame() %>%
+  rownames_to_column("gene") %>%
+  arrange(desc(Overall)) %>%
+  head(50)
+
+
+# =========================================================
+# 11. INTEGRATION WITH DESEQ2 (KEY PUBLICATION STEP)
+# =========================================================
+candidate_genes <- H_DE_genes %>%
+  filter(id %in% top_genes$gene)
+
+H_ML_prioritized <- candidate_genes
+
+
+# =========================================================
+# 12. OUTPUT TABLES
+# =========================================================
+write_xlsx(list(
+  ML_top_genes = top_genes,
+  DESeq_H_genes = H_DE_genes,
+  Integrated_candidates = H_ML_prioritized
+),
+"Results/Tables/H_ML_DESeq_integration.xlsx")
 ```
+
 
 
 ```{r}
