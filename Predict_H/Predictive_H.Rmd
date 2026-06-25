@@ -84,7 +84,10 @@ invisible(lapply(cran_packages, library, character.only = TRUE))
 
   #----------------- AFTER Installation You just need the following  -----------------#
 #install.packages("renv")
-renv::init()
+#renv::init()
+
+#renv::record(cran_packages)
+
 ```
 
 
@@ -112,10 +115,10 @@ invisible(
 
 ```{r FILE PATHS}
   #----------------- FILE PATHS -----------------#
-file_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/DESeq2_results.xlsx"
+dds_path <- "~/Desktop/Lab/TRAPseq/HvIM/Results/Tables/DESeq2_results.xlsx"
 #library(readxl)
-sheets <- excel_sheets(file_path)
-DESeq_res_list <- lapply(sheets, function(x) read_xlsx(file_path, sheet = x))
+sheets <- excel_sheets(dds_path)
+DESeq_res_list <- lapply(sheets, function(x) read_xlsx(dds_path, sheet = x))
 
 names(DESeq_res_list) <- sheets # name the list elements by sheet
 
@@ -155,42 +158,26 @@ res_H_UM <- res_H_UM %>%
 
 
 ```{r}
-# Install if needed
-# install.packages("randomForest")
-
-library(randomForest)
+#library(randomForest)
 
 # Load your data
-df <- read.csv("data.csv")
+df <- res_H_UM
 
 # Separate features and target
-X <- df[, setdiff(names(df), "target")]
-y <- df$target
+X <- df[, !(names(df) %in% c("gene", "target"))]
+y <- as.factor(df$target)
 
 # Train/test split
 set.seed(42)
-train_idx <- sample(seq_len(nrow(df)), size = 0.8 * nrow(df))
-
-X_train <- X[train_idx, ]
-y_train <- y[train_idx]
-
-X_test  <- X[-train_idx, ]
-y_test  <- y[-train_idx]
-
-# Fit Random Forest
 rf_model <- randomForest(
-  x = X_train,
-  y = as.factor(y_train),
-  ntree = 300,
-  mtry = floor(sqrt(ncol(X_train)))
+  x = X,
+  y = y,
+  ntree = 500,
+  importance = TRUE
 )
 
-# Predict
-preds <- predict(rf_model, X_test)
-
-# Accuracy
-accuracy <- mean(preds == y_test)
-print(paste("Accuracy:", accuracy))
+print(rf_model)
+varImpPlot(rf_model)
 
 ```
 
